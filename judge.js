@@ -4,7 +4,7 @@
   var SHORT_ST = { none: '', pending: '대기', ok: '인정', vague: '애매', fail: '미수행' };
 
   NC.pages['admin/judge'] = async function (el, q, alive) {
-    var isAdmin = NC.me.rank >= 2;
+    var isAdmin = NC.can('judge.all'), canAttend = NC.can('judge.attend');
     var t0 = U.today();
     var S = {
       week: U.weekOf(q.date || t0), view: q.view || 'item', mission: isAdmin ? (q.mission || 'study') : 'attend',
@@ -42,7 +42,7 @@
       if (S.filters.mentor) ms = ms.filter(function (m) { return m.mentor; });
       return ms;
     }
-    function missionList() { return S.filters.required ? NC.REQUIRED : NC.MISSIONS; }
+    function missionList() { var on = (G && G.missions) || NC.MISSIONS; return S.filters.required ? on.filter(function (mi) { return NC.REQUIRED.indexOf(mi) >= 0; }) : on; }
     function memberById(id) { return G.members.filter(function (m) { return m.id === id; })[0]; }
     function questTitle(d, mi) {
       var wq = G.quests[U.weekOf(d)];
@@ -84,9 +84,9 @@
       var st = r ? r.status : 'none';
       var off = c.mission !== 'weekly' ? offs[c.date + '|' + c.memberId] : null;
       var future = c.date > G.today;
-      var locked = !!G.locked[U.weekOf(c.date)];
-      var ro = future || locked || (!isAdmin && c.mission !== 'attend');
-      return { r: r, st: st, off: off, future: future, locked: locked, ro: ro };
+      var locked = !!G.locked[U.weekOf(c.date)], editable = G.editable ? G.editable[U.weekOf(c.date)] !== false : !locked;
+      var ro = future || !editable || (!isAdmin && !(canAttend && c.mission === 'attend'));
+      return { r: r, st: st, off: off, future: future, locked: locked, editable: editable, ro: ro };
     }
     function ck(c) { return key(c.date, c.memberId, c.mission); }
 
@@ -357,9 +357,10 @@
         (r && r.selfMarked ? '<dt>본인 체크</dt><dd>' + U.fmtDT(r.selfAt) + '</dd>' : '') +
         (c.mission === 'hours' ? '<dt>멤버 입력</dt><dd>' + (r && r.inputMin !== null ? U.fmtHM(r.inputMin) : '-') + '</dd>' : '') +
         (r && r.judgeBy ? '<dt>판정</dt><dd>' + esc(r.judgeName) + ' · ' + U.fmtDT(r.judgeAt) + '</dd>' : '') +
-        (i.off ? '<dt>데이오프</dt><dd><span class="dayoff-tag">OFF</span> ' + (i.off.mode === 'self' ? '본인 신청' : esc(i.off.byName) + ' 지정') + (i.off.reason ? ' · ' + esc(i.off.reason) : '') + '</dd>' : '') +
+        (i.off ? '<dt>데이오프</dt><dd><span class="dayoff-tag">OFF</span> ' + (i.off.mode === 'self' ? '본인 신청' : i.off.mode === 'holiday' ? '전체 휴일' : esc(i.off.byName) + ' 지정') + (i.off.reason ? ' · ' + esc(i.off.reason) : '') + '</dd>' : '') +
         '</dl>';
-      if (i.locked) det += '<p class="small muted">🔒 정산이 끝난 주라 바꿀 수 없어요. 필요하면 멤버 관리 › 파이에서 직접 지급·회수하세요.</p>';
+      if (i.locked && !i.editable) det += '<p class="small muted">🔒 정산이 끝난 주라 바꿀 수 없어요. 필요하면 멤버 관리 › 파이에서 직접 지급·회수하세요.</p>';
+      else if (i.locked) det += '<p class="small" style="color:var(--warn,#a77b00)">🔒 정산이 끝난 주예요. 바꾸면 파이 차액이 바로 반영되지만, 이미 지급한 주간 보너스는 그대로예요. (정산을 취소하고 다시 정산할 수 있어요)</p>';
       else if (c.date > G.today) det += '<p class="small muted">미래 날짜는 판정할 수 없어요.</p>';
       else if (!isAdmin && c.mission !== 'attend') det += '<p class="small muted">이 칸은 생존신고 출석 처리만 할 수 있어요.</p>';
       var acts = '';
@@ -400,7 +401,7 @@
       body.innerHTML = '<div class="loading"><div class="spinner"></div></div>';
       var d = await NC.api('judge.pending');
       if (!alive()) return;
-      var list = d.list.filter(function (r) { return isAdmin || r.mission === 'attend'; });
+      var list = d.list.filter(function (r) { return isAdmin || (canAttend && r.mission === 'attend'); });
       if (!list.length) { body.innerHTML = '<div class="card empty">확인 대기 중인 인증이 없어요 🎉</div>'; return; }
       var groups = {};
       list.forEach(function (r) { (groups[r.date] = groups[r.date] || []).push(r); });

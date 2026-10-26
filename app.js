@@ -12,7 +12,7 @@
   var KST = 9 * 3600000;
   function pad(n) { return (n < 10 ? '0' : '') + n; }
   function ymd(ms) { var d = new Date(ms + KST); return d.getUTCFullYear() + '-' + pad(d.getUTCMonth() + 1) + '-' + pad(d.getUTCDate()); }
-  function today() { return ymd(Date.now()); }
+  function today() { var h = (NC.settings && NC.settings.dayStartHour) || 0; return ymd(Date.now() - h * 3600000); }
   function addDays(s, n) { var d = new Date(s + 'T00:00:00Z'); d.setUTCDate(d.getUTCDate() + n); return d.toISOString().slice(0, 10); }
   function dow(s) { return (new Date(s + 'T00:00:00Z').getUTCDay() + 6) % 7; }
   function weekOf(s) { return addDays(s, -dow(s)); }
@@ -68,6 +68,30 @@
   NC.MISSION_SHORT = { attend: '생존', study: '공부', problem: '문제', mentoring: '멘토링', hours: '공부시간', daily: '데일리', weekly: '위클리' };
   NC.MISSIONS = ['attend', 'study', 'problem', 'mentoring', 'hours', 'daily'];
   NC.REQUIRED = ['attend', 'study', 'problem'];
+  var DEFAULT_SHORT = JSON.parse(JSON.stringify(NC.MISSION_SHORT)), DEFAULT_NAMES = JSON.parse(JSON.stringify(NC.MISSION_NAMES));
+  /** 서버 설정(미션 이름 · 태그 이름과 색 · 메뉴)을 화면에 반영 */
+  function applySettings(s) {
+    NC.settings = s;
+    if (s.missions) {
+      NC.MISSIONS = s.missions.filter(function (m) { return m.on; }).map(function (m) { return m.key; });
+      NC.REQUIRED = s.missions.filter(function (m) { return m.on && m.required; }).map(function (m) { return m.key; });
+      s.missions.forEach(function (m) { NC.MISSION_NAMES[m.key] = m.name; NC.MISSION_SHORT[m.key] = m.name === DEFAULT_NAMES[m.key] ? DEFAULT_SHORT[m.key] : (m.name.length > 5 ? m.name.slice(0, 5) : m.name); });
+      if (s.weeklyName) { NC.MISSION_NAMES.weekly = s.weeklyName; NC.MISSION_SHORT.weekly = s.weeklyName === DEFAULT_NAMES.weekly ? DEFAULT_SHORT.weekly : s.weeklyName.slice(0, 5); }
+    }
+    var T = s.texts || {};
+    ['dev', 'lead', 'sub', 'sup', 'mentor', 'mentee'].forEach(function (k) { if (T['tag.' + k]) NC.TAG_NAMES[k] = T['tag.' + k]; });
+    var css = '';
+    ['dev', 'lead', 'sub', 'sup', 'mentor', 'mentee'].forEach(function (k) { var c = T['color.' + k]; if (c && /^#[0-9a-fA-F]{3,8}$/.test(c)) css += '--tag-' + k + ':' + c + ';'; });
+    var st = document.getElementById('nc-tag-colors');
+    if (!st) { st = document.createElement('style'); st.id = 'nc-tag-colors'; document.head.appendChild(st); }
+    st.textContent = css ? ':root,:root[data-theme]{' + css + '}' : '';
+    document.title = s.groupName + ' 스터디그룹';
+  }
+  NC.applySettings = applySettings;
+  NC.T = function (k, d) { var T = (NC.settings && NC.settings.texts) || {}; return T[k] !== undefined && T[k] !== '' ? T[k] : (d || ''); };
+  NC.menuOn = function (k) { var v = NC.T('menu.' + k, 'O'); return !/^(x|n|no|0|false|끄기|끔)$/i.test(String(v).trim()); };
+  /** 이 기능을 쓸 수 있는지 (서버가 알려 준 표 그대로) */
+  NC.can = function (f) { return !!(NC.me && NC.me.can && NC.me.can[f]); };
   NC.STATUS_NAMES = { none: '미표시', pending: '확인 대기', ok: '확인 완료', vague: '애매함', fail: '미수행' };
   NC.REACTIONS = [['heart', '❤️'], ['thumb', '👍'], ['check', '✔️'], ['angry', '😠'], ['laugh', '😆'], ['cry', '😢'], ['wow', '😮']];
 
@@ -191,17 +215,42 @@
   NC.onAuthFail = function () { setToken(null); NC.me = null; toast('다시 로그인해 주세요.', 'err'); render(); };
   NC.logout = function () { setToken(null); NC.me = null; location.hash = '#/home'; render(); };
 
+  function takeBoot(b) { NC.me = b.me; NC.gameNames = b.gameNames; NC.season = { no: b.season, name: b.seasonName }; NC.maintenance = b.maintenance || ''; applySettings(b.settings); }
+  NC.takeBoot = takeBoot;
   async function boot() {
     if (!NC.token) return false;
     try {
-      var b = await NC.api('boot');
-      NC.me = b.me; NC.settings = b.settings; NC.gameNames = b.gameNames;
-      document.title = b.settings.groupName + ' 스터디그룹';
+      var path = parseHash().path;
+      if (path === 'home') {
+        // 앱을 열 때 홈 화면과 내 정보를 한 번에 받아요 (요청 1번)
+        var h = await NC.api('home', { boot: true });
+        takeBoot(h.boot); delete h.boot;
+        NC.preHome = { at: Date.now(), data: h };
+      } else takeBoot(await NC.api('boot'));
       return true;
-    } catch (e) { if (e.code !== 'AUTH') NC.err(e); return false; }
+    } catch (e) { if (e.code !== 'AUTH' && e.code !== 'MAINT') NC.err(e); return false; }
   }
   NC.refreshMe = async function () {
-    try { var b = await NC.api('boot'); NC.me = b.me; updateShellMe(); } catch (e) {}
+    try { takeBoot(await NC.api('boot')); updateShellMe(); } catch (e) {}
+  };
+  /** 점검 중 화면 */
+  NC.onMaintenance = function (msg) {
+    NC.me = null;
+    $('#app').innerHTML = '<div class="login"><div class="login-box"><div class="brand-big">' + NC.logo() + '<h1>점검 중이에요</h1><p>' + esc(msg || '잠시 후 다시 들어와 주세요.') + '</p></div>' +
+      '<div class="card stack"><button class="btn primary" id="mt-retry">다시 시도</button><button class="btn ghost" id="mt-out">로그아웃</button></div></div></div>';
+    $('#mt-retry').onclick = function () { location.reload(); };
+    $('#mt-out').onclick = function () { NC.logout(); };
+  };
+  /** 멤버 화면으로 보기 (개발자) → 돌아가기 */
+  NC.viewAs = async function (memberId) {
+    var r = await NC.api('view.as', { id: memberId });
+    try { localStorage.setItem('nc_token_back', NC.token); } catch (e) {}
+    setToken(r.token); NC.me = null; location.hash = '#/home'; render();
+  };
+  NC.viewBack = function () {
+    var t = null;
+    try { t = localStorage.getItem('nc_token_back'); localStorage.removeItem('nc_token_back'); } catch (e) {}
+    setToken(t); NC.me = null; location.hash = '#/admin/members'; render();
   };
 
   // ============================================================
@@ -220,23 +269,27 @@
     { sec: '운영', rank: 1 }
   ];
   /** 운영 메뉴: 4개 묶음, 각 묶음 안은 위쪽 탭으로 이동 */
+  /** 운영 메뉴: 4개 묶음, 각 묶음 안은 위쪽 탭으로 이동. 세 번째 값은 그 탭을 쓰는 기능 (서버의 ACCESS 표) */
   var GROUPS = [
-    { key: 'check', label: '인증 확인', icon: 'judge', rank: 1, tabs: [['admin', '오늘 할 일', 2], ['admin/judge', '판정 표', 1], ['admin/pending', '확인 대기', 1]] },
-    { key: 'people', label: '멤버 관리', icon: 'users', rank: 2, tabs: [['admin/members', '멤버 목록', 2], ['admin/warnings', '경고', 2], ['admin/dayoffs', '데이오프', 2], ['admin/pie', '파이', 2]] },
-    { key: 'content', label: '콘텐츠 관리', icon: 'quest', rank: 2, tabs: [['admin/quests', '퀘스트', 2], ['admin/shop', '상점', 2], ['admin/games', '미니게임', 2], ['admin/notices', '공지', 2]] },
-    { key: 'records', label: '정산 · 기록', icon: 'coin', rank: 2, tabs: [['admin/settle', '주간 정산', 2], ['admin/logs', '활동 기록', 2], ['admin/system', '시스템 설정', 4]] }
+    { key: 'check', label: '인증 확인', icon: 'judge', tabs: [['admin', '오늘 할 일', 'admin.home'], ['admin/judge', '판정 표', 'judge.view'], ['admin/pending', '확인 대기', 'judge.view']] },
+    { key: 'people', label: '멤버 관리', icon: 'users', tabs: [['admin/members', '멤버 목록', 'members.manage'], ['admin/warnings', '경고', 'warn.manage'], ['admin/dayoffs', '데이오프', 'dayoff.manage'], ['admin/pie', '파이', 'pie.view']] },
+    { key: 'content', label: '콘텐츠 관리', icon: 'quest', tabs: [['admin/quests', '퀘스트', 'quests.manage'], ['admin/shop', '상점', 'shop.manage'], ['admin/games', '미니게임', 'games.schedule'], ['admin/notices', '공지', 'notices.manage']] },
+    { key: 'records', label: '정산 · 기록', icon: 'coin', tabs: [['admin/settle', '주간 정산', 'settle.view'], ['admin/logs', '활동 기록', 'logs.view'], ['admin/system', '시스템 설정', 'settings.edit'], ['admin/data', '데이터 도구', 'data.edit']] }
   ];
   function groupOf(path) { for (var i = 0; i < GROUPS.length; i++) for (var j = 0; j < GROUPS[i].tabs.length; j++) if (GROUPS[i].tabs[j][0] === path) return GROUPS[i]; return null; }
-  function groupTabs(g) { return g.tabs.filter(function (t) { return NC.me.rank >= t[2]; }); }
+  function groupTabs(g) { return g.tabs.filter(function (t) { return NC.can(t[2]); }); }
   NC.groupOf = groupOf;
-  var TABS = [['home', '홈', 'home'], ['calendar', '달력', 'cal'], ['games', '게임', 'game'], ['shop', '상점', 'shop'], ['me', '내 현황', 'user']];
+  var ALL_TABS = [['home', '홈', 'home'], ['calendar', '달력', 'cal'], ['games', '게임', 'game'], ['shop', '상점', 'shop'], ['me', '내 현황', 'user']];
   var TITLES = { home: '홈', calendar: '달력', games: '미니게임', shop: '상점', me: '내 현황', ranking: '랭킹', board: '공지 · 한줄 게시판' };
-  function pageRank(path) {
+  var MENU_KEY = { games: 'games', shop: 'shop', ranking: 'ranking', board: 'board' };
+  function pageAllowed(path) {
+    if (MENU_KEY[path] && !NC.menuOn(MENU_KEY[path])) return false;
     var g = groupOf(path);
-    if (!g) return 0;
-    for (var j = 0; j < g.tabs.length; j++) if (g.tabs[j][0] === path) return g.tabs[j][2];
-    return 2;
+    if (!g) return path.indexOf('admin') !== 0;
+    for (var j = 0; j < g.tabs.length; j++) if (g.tabs[j][0] === path) return NC.can(g.tabs[j][2]);
+    return false;
   }
+  function firstAdminPage() { for (var i = 0; i < GROUPS.length; i++) { var t = groupTabs(GROUPS[i]); if (t.length) return t[0][0]; } return null; }
 
   function parseHash() {
     var h = location.hash.replace(/^#\/?/, '') || 'home';
@@ -247,15 +300,17 @@
   NC.go = function (path) { if (location.hash === '#/' + path) route(); else location.hash = '#/' + path; };
 
   function shellHtml() {
-    var r = NC.me.rank;
-    var nav = NAV.filter(function (n) { return !n.rank || r >= n.rank; }).map(function (n) {
+    var groups = GROUPS.filter(function (g) { return groupTabs(g).length; });
+    var nav = NAV.filter(function (n) { return n.sec ? (!n.rank || groups.length) : pageAllowed(n.path); }).map(function (n) {
       if (n.sec) return '<div class="nav-sec">' + n.sec + '</div>';
       return '<a class="nav-item" data-path="' + n.path + '" href="#/' + n.path + '">' + icon(n.icon) + '<span>' + n.label + '</span></a>';
-    }).join('') + GROUPS.filter(function (g) { return r >= g.rank; }).map(function (g) {
+    }).join('') + groups.map(function (g) {
       return '<a class="nav-item" data-group="' + g.key + '" href="#/' + groupTabs(g)[0][0] + '">' + icon(g.icon) + '<span>' + g.label + '</span></a>';
     }).join('');
+    var TABS = ALL_TABS.filter(function (t) { return pageAllowed(t[0]); });
     return '<div class="shell">' +
-      '<aside class="side" id="side"><div class="brand">' + NC.logo() + '<div><div class="title">' + esc(NC.settings.groupName) + '</div><div class="sub">공스타그램 스터디그룹</div></div></div>' +
+      (NC.me.viewOnly ? '<div class="viewas-bar">👀 <b>' + esc(NC.me.name) + '</b>님 화면으로 보는 중 (보기 전용)<button class="btn sm" id="viewas-back">내 화면으로 돌아가기</button></div>' : '') +
+      '<aside class="side" id="side"><div class="brand">' + NC.logo() + '<div><div class="title">' + esc(NC.settings.groupName) + '</div><div class="sub">' + esc(NC.T('subtitle', '공스타그램 스터디그룹')) + '</div></div></div>' +
       '<nav>' + nav + '</nav>' +
       '<div class="me-box"><div class="grow"><div class="ellipsis" style="font-weight:600" id="side-me"></div><div class="tiny muted">@' + esc(NC.me.id) + '</div></div>' +
       '<button class="btn ghost icon sm" id="theme-btn" title="화면 모드">' + icon('moon') + '</button>' +
@@ -290,7 +345,8 @@
     $('#menu-btn').onclick = function () { side.classList.add('open'); scrim.classList.add('on'); };
     scrim.onclick = closeSide;
     $$('.nav-item', side).forEach(function (a) { a.addEventListener('click', closeSide); });
-    $('#logout-btn').onclick = async function () { if (await NC.confirm('로그아웃할까요?')) NC.logout(); };
+    $('#logout-btn').onclick = async function () { if (NC.me.viewOnly) return NC.viewBack(); if (await NC.confirm('로그아웃할까요?')) NC.logout(); };
+    if ($('#viewas-back')) $('#viewas-back').onclick = function () { NC.viewBack(); };
     $('#theme-btn').onclick = function () {
       var dark = document.documentElement.getAttribute('data-theme') === 'dark' ||
         (!document.documentElement.getAttribute('data-theme') && matchMedia('(prefers-color-scheme: dark)').matches);
@@ -306,8 +362,8 @@
     if (!NC.me) return;
     if (NC.cleanup) { try { NC.cleanup(); } catch (e) {} NC.cleanup = null; }
     var h = parseHash(), path = h.path;
-    if (path.indexOf('admin') === 0 && !groupOf(path)) path = 'admin/judge';
-    if (NC.me.rank < pageRank(path)) path = NC.me.rank >= 1 ? 'admin/judge' : 'home';
+    if (path.indexOf('admin') === 0 && !groupOf(path)) path = firstAdminPage() || 'home';
+    if (!pageAllowed(path)) path = path.indexOf('admin') === 0 ? (firstAdminPage() || 'home') : 'home';
     if (!NC.pages[path]) path = 'home';
     var g = groupOf(path);
     $$('[data-path]').forEach(function (a) { a.classList.toggle('on', a.getAttribute('data-path') === path); });
@@ -358,16 +414,21 @@
     var data;
     try { data = await NC.api('public.members'); }
     catch (e) { $('#login-card').innerHTML = '<div class="empty">' + esc(e.message) + '</div>'; return; }
+    NC.settings = NC.settings || { texts: data.texts || {} };
+    if (!NC.settings.texts) NC.settings.texts = data.texts || {};
     $('.login h1').textContent = data.groupName + ' 스터디그룹';
+    $('.login .brand-big p').textContent = (data.texts && data.texts.loginTagline) || '오늘도 방향을 잃지 않고, 한 걸음씩';
+    var pwNotice = (data.texts && data.texts.pwNotice) || '실제 사용하는 비밀번호와 다른 비밀번호를 사용하세요. 관리자가 열람할 수 있습니다.';
     var sel = null;
     var card = $('#login-card');
     card.innerHTML =
+      (data.maintenance ? '<div class="banner urgent">🛠 ' + esc(data.maintenance) + ' (지금은 개발자만 들어올 수 있어요)</div>' : '') +
       (NC.demo ? '<div class="demo-note"><b>체험판</b> — 예시 데이터로 움직이고, 이 브라우저에만 저장돼요. 모든 계정 비밀번호는 <b>1234</b>예요. (개발자: 개발자 / 대표: 한서윤 / 부대표: 정도윤 / 서포터: 윤하린)</div>' : '') +
       '<label class="field"><span>내 이름 찾기</span><input class="input" id="lg-q" placeholder="이름 또는 아이디로 검색" autocomplete="off"></label>' +
       '<div class="member-pick" id="lg-list"></div>' +
       '<div id="lg-pw" class="stack hidden"><div class="row"><span id="lg-who"></span><button class="btn ghost sm right" id="lg-change">다른 사람</button></div>' +
       '<label class="field"><span>비밀번호</span><input class="input" type="password" id="lg-pwi" autocomplete="current-password"></label>' +
-      '<div class="notice-pw">실제 사용하는 비밀번호와 다른 비밀번호를 사용하세요. 관리자가 열람할 수 있습니다.</div>' +
+      '<div class="notice-pw">' + esc(pwNotice) + '</div>' +
       '<button class="btn primary lg block" id="lg-go">로그인</button></div>';
     function list(q) {
       q = (q || '').trim().toLowerCase();
@@ -395,6 +456,7 @@
         var r = await NC.api('auth.login', { id: sel.id, pw: $('#lg-pwi').value });
         setToken(r.token);
         NC.me = null;
+        if (r.settings) { takeBoot(r); mountShell(); if (NC.games && NC.games.recover) NC.games.recover(); }
         if (!location.hash || location.hash === '#/') location.hash = '#/home';
         await render();
       } catch (e) { NC.err(e); b.disabled = false; }
@@ -508,7 +570,8 @@
   // 홈
   // ============================================================
   NC.pages.home = async function (el, q, alive) {
-    var d = await NC.api('home');
+    var d = NC.preHome && Date.now() - NC.preHome.at < 10000 ? NC.preHome.data : await NC.api('home');
+    NC.preHome = null;
     if (!alive()) return;
     NC.me.balance = d.balance; updateShellMe();
     var G = d.game;
@@ -517,16 +580,17 @@
       '<div class="stack">' +
       '<div class="hero">' + NC.logo('compass-bg') + '<div class="hello">' + hello + ' · ' + mdw(d.today) + '</div><div class="name">' + esc(NC.me.name) + '님</div>' +
       '<div class="nums"><div><div class="k">파이 잔액</div><div class="v num">' + num(d.balance) + '</div></div><div><div class="k">경고</div><div class="v num">' + d.warnings + '<span style="font-size:14px;opacity:.7">/' + d.expelAt + '</span></div></div>' +
-      (G.game ? '<div><div class="k">미니게임</div><div class="v num">' + G.remaining + '<span style="font-size:14px;opacity:.7">회 남음</span></div></div>' : '') + '</div></div>' +
+      (G.games.length && NC.menuOn('games') ? '<div><div class="k">미니게임</div><div class="v num">' + G.remaining + '<span style="font-size:14px;opacity:.7">회 남음</span></div></div>' : '') + '</div></div>' +
+      (d.homeNotice ? '<div class="banner" style="white-space:pre-wrap">📣 ' + esc(d.homeNotice) + '</div>' : '') +
       '<div id="h-banners" class="stack" style="gap:8px"></div>' +
       '<div class="grid2">' +
-      '<div class="card"><div class="card-head"><h2>오늘의 미션</h2>' + (d.day.dayoff ? '<span class="dayoff-tag">OFF 데이오프</span>' : '') + '<a class="more" href="#/calendar">달력 ›</a></div><div id="h-missions"></div></div>' +
+      '<div class="card"><div class="card-head"><h2>오늘의 미션</h2>' + (d.day.dayoff ? '<span class="dayoff-tag">' + (d.day.dayoff.mode === 'holiday' ? 'OFF 전체 휴일' : 'OFF 데이오프') + '</span>' : '') + '<a class="more" href="#/calendar">달력 ›</a></div><div id="h-missions"></div></div>' +
       '<div class="stack">' +
       '<div class="card"><div class="card-head"><h2>퀘스트</h2></div><div class="stack" id="h-quests" style="gap:10px"></div></div>' +
-      '<a class="card" href="#/games" style="text-decoration:none;display:block"><div class="game-hero"><div class="gi">' + (NC.games ? NC.games.emoji(G.game) : '🎮') + '</div><div class="grow"><div class="small muted">오늘의 미니게임</div>' +
-      '<div style="font-weight:700;font-size:17px">' + (G.game ? esc(G.gameName) : '오늘은 쉬어요') + '</div><div class="small muted">기회 ' + G.used + '/' + G.chances.total + ' · 오늘 ' + G.earned + ' / ' + G.maxPerDay + ' 파이</div></div><span class="btn primary sm">하러 가기</span></div></a>' +
+      (NC.menuOn('games') ? '<a class="card" href="#/games" style="text-decoration:none;display:block"><div class="game-hero"><div class="gi' + (G.games.length > 1 ? ' two' : '') + '">' + (NC.games ? G.games.map(function (g) { return NC.games.emoji(g); }).join('') || '🎮' : '🎮') + '</div><div class="grow"><div class="small muted">오늘의 미니게임' + (G.games.length > 1 ? ' · 둘 중 골라서' : '') + '</div>' +
+      '<div style="font-weight:700;font-size:17px">' + (G.games.length ? esc(G.gameNames.join(' / ')) : '오늘은 쉬어요') + '</div><div class="small muted">기회 ' + G.used + '/' + G.chances.total + ' · 오늘 ' + G.earned + ' / ' + G.maxPerDay + ' 파이</div></div><span class="btn primary sm">하러 가기</span></div></a>' : '') +
       '</div></div>' +
-      '<div class="grid2">' +
+      (NC.menuOn('board') ? '<div class="grid2">' : '<div class="grid2 hidden">') +
       '<div class="card"><div class="card-head"><h2>공지</h2>' + (d.newNotices ? '<span class="badge new">N ' + d.newNotices + '</span>' : '') + '<a class="more" href="#/board">전체 ›</a></div><div id="h-notices"></div></div>' +
       '<div class="card"><div class="card-head"><h2>한줄 게시판</h2><a class="more" href="#/board?tab=posts">더 보기 ›</a></div><div id="h-posts"></div></div>' +
       '</div></div>';
@@ -572,7 +636,7 @@
         var recs = byDate[day] || {};
         var dots = NC.MISSIONS.map(function (mi) { var st = recs[mi]; return st && st !== 'none' ? '<span class="dot st-' + st + '" title="' + NC.MISSION_NAMES[mi] + '"></span>' : ''; }).join('');
         cells += '<div class="d' + (day.slice(0, 7) !== month ? ' out' : '') + (day === t ? ' today' : '') + (offs[day] ? ' off' : '') + (day > t ? ' future' : '') + '" data-d="' + day + '">' +
-          '<span class="n">' + (+day.slice(8)) + '</span>' + (offs[day] ? '<span class="off-l">OFF</span>' : '') + '<span class="dots">' + dots + '</span></div>';
+          '<span class="n">' + (+day.slice(8)) + '</span>' + (offs[day] ? '<span class="off-l" title="' + esc(offs[day].mode === 'holiday' ? '전체 휴일 · ' + offs[day].reason : '데이오프') + '">' + (offs[day].mode === 'holiday' ? '휴일' : 'OFF') + '</span>' : '') + '<span class="dots">' + dots + '</span></div>';
       }
       var y = +month.slice(0, 4), m = +month.slice(5, 7);
       el.innerHTML = '<div class="card"><div class="row" style="margin-bottom:12px"><button class="btn icon ghost" id="c-prev">' + icon('left') + '</button>' +
@@ -591,7 +655,7 @@
       var m = modal({ title: mdw(date), body: '<div class="loading"><div class="spinner"></div></div>', onClose: function () { draw(); } });
       try {
         var r = await NC.api('mission.day', { date: date });
-        m.body.innerHTML = r.day.dayoff ? '<div style="margin-bottom:6px"><span class="dayoff-tag">OFF 데이오프</span> <span class="small muted">' + (r.day.dayoff.mode === 'self' ? '본인 신청' : '운영진 지정') + '</span></div>' : '';
+        m.body.innerHTML = r.day.dayoff ? '<div style="margin-bottom:6px"><span class="dayoff-tag">' + (r.day.dayoff.mode === 'holiday' ? 'OFF 전체 휴일' : 'OFF 데이오프') + '</span> <span class="small muted">' + (r.day.dayoff.mode === 'self' ? '본인 신청' : r.day.dayoff.mode === 'holiday' ? esc(r.day.dayoff.reason || '') : '운영진 지정') + '</span></div>' : '';
         if (r.day.locked) m.body.innerHTML += '<div class="small muted" style="margin-bottom:6px">🔒 정산이 끝난 주예요</div>';
         m.body.appendChild(missionRows(r.day));
         var wk = document.createElement('div'); wk.style.marginTop = '12px';
@@ -636,7 +700,8 @@
       '<div class="stack"><div class="card"><div class="card-head"><h2>이번 주 공부시간</h2><a class="more" href="#/ranking">랭킹 ›</a></div>' +
       '<div class="row"><div class="big-num" style="font-size:34px">' + fmtHM(d.studyMin) + '</div><div class="right center">' + (d.rank ? '<div class="small muted">현재</div><div style="font-size:22px;font-weight:800">' + d.rank + '등</div>' + (d.rankBonus ? '<div class="tiny plus">+' + num(d.rankBonus) + '</div>' : '') : '<div class="small muted">순위 없음</div>') + '</div></div>' +
       '<div class="tiny muted">운영진이 확정한 시간만 합산돼요.</div></div>' +
-      '<div class="card"><div class="card-head"><h2>데이오프</h2><span class="small muted">본인 신청 주 1회</span></div>' +
+      '<div class="card"><div class="card-head"><h2>데이오프</h2><span class="small muted">본인 신청 주 ' + d.dayoffPerWeek + '회' + (d.dayoffPerWeek ? ' · 남은 ' + d.dayoffSelfLeft + '회' : '') + '</span></div>' +
+      (d.holidays.length ? '<div class="small" style="margin-bottom:8px">🏖 전체 휴일: ' + d.holidays.map(function (h) { return mdw(h.date) + ' (' + esc(h.reason) + ')'; }).join(', ') + '</div>' : '') +
       (offRows ? '<div class="list">' + offRows + '</div>' : '<div class="small muted">이번 주 데이오프 없음</div>') +
       (!d.dayoffSelfUsed ? '<div class="row" style="margin-top:10px"><select class="input sm grow" id="off-date">' + dates.map(function (x) { return '<option value="' + x + '">' + mdw(x) + (x === t ? ' · 오늘' : '') + '</option>'; }).join('') + '</select><button class="btn sm primary" id="off-req">신청</button></div>' +
         '<div class="tiny muted" style="margin-top:6px">신청하면 바로 적용돼요. 그날 필수 미션을 안 해도 경고 후보에 오르지 않아요. (파이는 지급되지 않음)</div>' : '') +
@@ -647,14 +712,14 @@
           '<div class="tiny muted">' + (w.refDate ? mdw(w.refDate) + ' ' + esc(w.refName) + ' · ' : '') + fmtDT(w.at) + (w.canceled ? ' · ' + esc(w.canceledByName) + (w.cancelReason ? ' (' + esc(w.cancelReason) + ')' : '') : '') + '</div></div></div>';
       }).join('') + '</div>' : '<div class="small muted">경고가 없어요 👏</div>') + '</div>' +
       '<div class="card"><div class="card-head"><div class="seg" id="me-tab"><button class="on" data-t="ledger">파이 내역</button><button data-t="buy">구매 내역</button></div></div><div id="me-list"></div></div>' +
-      '<div class="card"><div class="card-head"><h2>비밀번호 변경</h2></div><div class="notice-pw" style="margin-bottom:10px">실제 사용하는 비밀번호와 다른 비밀번호를 사용하세요. 관리자가 열람할 수 있습니다.</div>' +
+      '<div class="card"><div class="card-head"><h2>비밀번호 변경</h2></div><div class="notice-pw" style="margin-bottom:10px">' + esc(NC.T('pwNotice', '실제 사용하는 비밀번호와 다른 비밀번호를 사용하세요. 관리자가 열람할 수 있습니다.')) + '</div>' +
       '<div class="form-grid"><label class="field"><span>현재 비밀번호</span><input class="input" type="password" id="pw-old"></label><label class="field"><span>새 비밀번호</span><input class="input" type="password" id="pw-new"></label></div>' +
       '<div class="row" style="margin-top:10px"><button class="btn primary" id="pw-save">변경</button><button class="btn ghost right" id="me-logout">' + icon('logout') + ' 로그아웃</button></div></div>' +
       '</div>';
     function list(tab) {
       if (tab === 'ledger') {
         $('#me-list').innerHTML = d.ledger.length ? '<div class="list">' + d.ledger.map(function (l) {
-          return '<div class="li"><div class="grow"><div class="small"><b>' + esc(l.typeName) + '</b> ' + (l.refDate ? '<span class="muted">' + md(l.refDate) + '</span> ' : '') + esc(['mission', 'rejudge', 'sheet', 'game', 'weekly'].indexOf(l.type) >= 0 ? l.refName : '') + '</div>' +
+          return '<div class="li"><div class="grow"><div class="small"><b>' + esc(l.typeName) + '</b> ' + (l.refDate ? '<span class="muted">' + md(l.refDate) + '</span> ' : '') + esc(['mission', 'rejudge', 'sheet', 'game', 'weekly', 'fix'].indexOf(l.type) >= 0 ? l.refName : '') + '</div>' +
             '<div class="tiny muted">' + fmtDT(l.at) + (l.reason ? ' · ' + esc(l.reason) : '') + '</div></div><span class="num ' + (l.amount > 0 ? 'plus' : 'minus') + '">' + signed(l.amount) + '</span></div>';
         }).join('') + '</div>' : '<div class="empty">아직 내역이 없어요</div>';
       } else {
@@ -667,7 +732,7 @@
     list('ledger');
     if ($('#off-req')) $('#off-req').onclick = async function () {
       var date = $('#off-date').value;
-      if (!(await NC.confirm(mdw(date) + '을(를) 데이오프로 신청할까요?\n이번 주 본인 신청은 1회만 할 수 있어요.'))) return;
+      if (!(await NC.confirm(mdw(date) + '을(를) 데이오프로 신청할까요?\n이번 주 본인 신청은 ' + d.dayoffPerWeek + '회까지 할 수 있어요.'))) return;
       try { await NC.api('dayoff.request', { date: date }); toast('데이오프를 신청했어요.', 'ok'); route(); } catch (e) { NC.err(e); }
     };
     $$('[data-cancel-off]').forEach(function (b) { b.onclick = async function () {
@@ -765,7 +830,7 @@
       box.innerHTML = '<div class="loading"><div class="spinner"></div></div>';
       var list = (await NC.api('notices.list')).filter(function (n) { return !n.draft; });
       if (!alive()) return;
-      box.innerHTML = '<div class="card">' + (NC.me.rank >= 2 ? '<div class="row" style="margin-bottom:6px"><a class="btn sm right" href="#/admin/notices">공지 관리</a></div>' : '') +
+      box.innerHTML = '<div class="card">' + (NC.can('notices.manage') ? '<div class="row" style="margin-bottom:6px"><a class="btn sm right" href="#/admin/notices">공지 관리</a></div>' : '') +
         (list.length ? list.map(function (n) {
           return '<div class="notice-item" data-n="' + n.id + '"><div class="row">' + (n.pinned ? '📌' : '') + (n.important ? '<span class="badge req">중요</span>' : '') + '<b class="grow ellipsis">' + esc(n.title) + '</b>' + (n.isNew ? '<span class="badge new">N</span>' : '') + '</div>' +
             '<div class="tiny muted">' + esc(n.authorName) + ' · ' + fmtDT(n.at) + '</div></div>';
@@ -794,17 +859,18 @@
       draw();
     }
     function draw() {
-      var meId = NC.me.id, rank = NC.me.rank;
+      var meId = NC.me.id, canManage = NC.can('posts.manage'), canHide = NC.can('posts.hide');
       $('#ps-list').innerHTML = items.length ? items.map(function (p) {
         var rx = NC.REACTIONS.filter(function (r) { return p.reactions[r[0]] && p.reactions[r[0]].length; }).map(function (r) {
           var arr = p.reactions[r[0]], mine = arr.some(function (x) { return x.id === meId; });
           return '<button class="' + (mine ? 'mine' : '') + '" data-rx="' + r[0] + '" title="' + esc(arr.map(function (x) { return x.name; }).join(', ')) + '">' + r[1] + ' <span class="num">' + arr.length + '</span></button>';
         }).join('');
         var tools = '';
-        if (p.author.id === meId || rank >= 2) tools += '<button class="btn ghost sm" data-del>삭제</button>';
-        if (rank >= 1) tools += '<button class="btn ghost sm" data-hide>' + (p.hidden ? '숨김 해제' : '숨김') + '</button>';
+        if (p.author.id === meId || canManage) tools += '<button class="btn ghost sm" data-edit>고치기</button><button class="btn ghost sm" data-del>삭제</button>';
+        if (canHide) tools += '<button class="btn ghost sm" data-hide>' + (p.hidden ? '숨김 해제' : '숨김') + '</button>';
+        if (canManage && Object.keys(p.reactions || {}).length) tools += '<button class="btn ghost sm" data-clear>반응 지우기</button>';
         return '<div class="post' + (p.hidden ? ' hidden-post' : '') + '" data-p="' + p.id + '"><div class="row small">' + who(p.author) + (p.hidden ? '<span class="badge soft">숨김</span>' : '') + '<span class="muted tiny right">' + fmtAgo(p.at) + '</span></div>' +
-          '<div class="txt">' + esc(p.text) + '</div><div class="rx">' + rx + '<button class="add" data-add>＋😊</button><span class="right row" style="gap:2px">' + tools + '</span></div></div>';
+          '<div class="txt">' + esc(p.text) + (p.edited ? ' <span class="tiny muted">(고침)</span>' : '') + '</div><div class="rx">' + rx + '<button class="add" data-add>＋😊</button><span class="right row" style="gap:2px">' + tools + '</span></div></div>';
       }).join('') : '<div class="empty">아직 글이 없어요. 첫 글을 남겨보세요!</div>';
       $('#ps-more').innerHTML = more ? '<button class="btn sm" style="margin-top:10px">더 보기</button>' : '';
       if (more) $('#ps-more button').onclick = function () { posts(true); };
@@ -828,7 +894,16 @@
           setTimeout(function () { document.addEventListener('click', function off(ev) { if (!pk.contains(ev.target)) { pk.remove(); document.removeEventListener('click', off); } }); }, 0);
           e.stopPropagation();
         };
-        var del = $('[data-del]', pe), hide = $('[data-hide]', pe);
+        var del = $('[data-del]', pe), hide = $('[data-hide]', pe), ed = $('[data-edit]', pe), clr = $('[data-clear]', pe);
+        if (ed) ed.onclick = async function () {
+          var t = await NC.confirm('글을 고칩니다.', { title: '글 고치기', ok: '저장', extra: '<textarea class="input" id="pe-t" maxlength="150" rows="3">' + esc(p.text) + '</textarea>', collect: function (x) { return $('#pe-t', x).value; } });
+          if (!t) return;
+          try { await NC.api('posts.edit', { id: id, text: t }); p.text = t.trim(); p.edited = true; draw(); } catch (e) { NC.err(e); }
+        };
+        if (clr) clr.onclick = async function () {
+          if (!(await NC.confirm('이 글의 반응을 모두 지울까요?', { danger: true, ok: '지우기' }))) return;
+          try { await NC.api('posts.clearReactions', { id: id }); p.reactions = {}; draw(); } catch (e) { NC.err(e); }
+        };
         if (del) del.onclick = async function () {
           if (!(await NC.confirm('이 글을 삭제할까요?', { danger: true, ok: '삭제' }))) return;
           try { await NC.api('posts.delete', { id: id }); items = items.filter(function (x) { return x.id !== id; }); draw(); } catch (e) { NC.err(e); }

@@ -649,51 +649,62 @@
   NC.pages.games = async function (el, q, alive) {
     var S = await NC.api('game.state');
     if (!alive()) return;
-    var active = null;
-    var cfg = S.cfg;
+    var active = null, cur = S.games[0] || null;
+    function cfgOf(g) { return (S.cfgs && S.cfgs[g]) || S.cfg; }
     function head() {
       var bonusHint = S.chances.bonus === 0 && S.chances.bonusAvailable > 0 ? '<div class="banner" style="margin-top:12px">📚 오늘 공부인증을 체크하면 기회가 ' + S.chances.bonusAvailable + '회 늘어나요! <a href="#/home" class="right small">체크하러 가기 ›</a></div>' : '';
-      return '<div class="card"><div class="game-hero"><div class="gi">' + (EMOJI[S.game] || '🎮') + '</div><div class="grow"><div class="small muted">오늘의 미니게임 · ' + U.mdw(S.date) + '</div><h2 style="font-size:21px">' + esc(S.gameName || '오늘은 쉬어요') + '</h2>' +
-        '<div class="small" style="color:var(--ink-2);margin-top:2px">' + (DESC[S.game] || '') + '</div></div></div>' +
+      var title = S.games.length ? S.gameNames.join(' / ') : '오늘은 쉬어요';
+      return '<div class="card"><div class="game-hero"><div class="gi' + (S.games.length > 1 ? ' two' : '') + '">' + (S.games.map(function (g) { return EMOJI[g]; }).join('') || '🎮') + '</div><div class="grow"><div class="small muted">오늘의 미니게임 · ' + U.mdw(S.date) + (S.games.length > 1 ? ' · 도전할 때마다 둘 중 하나를 골라요' : '') + '</div><h2 style="font-size:21px">' + esc(title) + '</h2>' +
+        (S.games.length === 1 ? '<div class="small" style="color:var(--ink-2);margin-top:2px">' + (DESC[S.games[0]] || '') + '</div>' : '') + '</div></div>' +
         '<div class="grid3" style="margin-top:14px"><div class="stat"><div class="k">남은 기회</div><div class="v num">' + S.remaining + '<small>/ ' + S.chances.total + '</small></div></div>' +
-        '<div class="stat"><div class="k">오늘 획득</div><div class="v num">' + S.earned + '<small>/ ' + S.maxPerDay + '</small></div></div></div>' + bonusHint + '</div>';
+        '<div class="stat"><div class="k">오늘 획득</div><div class="v num">' + S.earned + '<small>/ ' + S.maxPerDay + '</small></div></div>' +
+        (S.chances.extra ? '<div class="stat"><div class="k">운영진이 준 기회</div><div class="v num">' + (S.chances.extra > 0 ? '+' : '') + S.chances.extra + '</div></div>' : '') + '</div>' + bonusHint + '</div>';
+    }
+    function picker() {
+      if (S.games.length < 2) return '';
+      return '<div class="game-pick">' + S.games.map(function (g) {
+        return '<button class="game-opt' + (g === cur ? ' on' : '') + '" data-g="' + g + '"><span class="e">' + EMOJI[g] + '</span><span class="n">' + esc(NC.gameNames[g] || g) + '</span><span class="d">' + esc(DESC[g] || '') + '</span></button>';
+      }).join('') + '</div>';
     }
     function draw() {
-      el.innerHTML = '<div class="stack">' + head() + (S.game ? '<div class="grid2" style="align-items:start"><div class="stack"><div class="game-stage" id="gs"></div></div>' +
-        '<div class="stack"><div class="card"><div class="card-head"><h2>보상표</h2><span class="small muted">1회 최대 ' + S.maxPerPlay + '</span></div>' + rewardTable(S.game, cfg) + '</div>' +
+      el.innerHTML = '<div class="stack">' + head() + (S.games.length ? picker() + '<div class="grid2" style="align-items:start"><div class="stack"><div class="game-stage" id="gs"></div></div>' +
+        '<div class="stack"><div class="card"><div class="card-head"><h2>보상표' + (S.games.length > 1 ? ' · ' + esc(NC.gameNames[cur] || '') : '') + '</h2><span class="small muted">1회 최대 ' + S.maxPerPlay + '</span></div>' + rewardTable(cur, cfgOf(cur)) + '</div>' +
         '<div class="card"><div class="card-head"><h2>오늘 기록</h2></div>' + (S.plays.length ? '<div class="list">' + S.plays.map(function (p) {
-          return '<div class="li"><span class="pill">' + p.round + '회차</span><span class="grow small">' + esc(p.resultText || '') + '</span><b class="' + (p.pie ? 'plus' : '') + '">' + (p.status === 'done' ? '+' + p.pie : '진행 중') + '</b></div>';
+          return '<div class="li"><span class="pill">' + p.round + '회차</span>' + (S.games.length > 1 ? '<span class="small">' + EMOJI[p.game] + '</span>' : '') + '<span class="grow small">' + esc(p.resultText || '') + '</span><b class="' + (p.pie ? 'plus' : '') + '">' + (p.status === 'done' ? '+' + p.pie : '진행 중') + '</b></div>';
         }).join('') + '</div>' : '<div class="small muted">아직 도전하지 않았어요</div>') + '</div>' +
-        '<div class="card small muted">• 시작하면 기회가 1회 소진돼요. 도중에 나가면 그 시점의 결과로 처리돼요.<br>• 기회는 매일 24:00에 초기화돼요. 데이오프인 날에도 할 수 있어요.<br>• 기회를 다 쓰면 연습 모드로 계속 즐길 수 있어요 (파이 없음).</div></div></div>' : '<div class="card empty">오늘은 열린 게임이 없어요.</div>') + '</div>';
-      if (S.game) lobby();
+        '<div class="card small muted">• 시작하면 기회가 1회 소진돼요. 도중에 나가면 그 시점의 결과로 처리돼요.<br>• 기회는 하루가 바뀌면 초기화돼요. 데이오프인 날에도 할 수 있어요.<br>• 기회를 다 쓰면 연습 모드로 계속 즐길 수 있어요 (파이 없음).</div></div></div>' : '<div class="card empty">오늘은 열린 게임이 없어요.</div>') + '</div>';
+      $$('[data-g]', el).forEach(function (b) { b.onclick = function () { if (active) return; cur = b.getAttribute('data-g'); draw(); }; });
+      if (S.games.length) lobby();
     }
     function lobby() {
       var gs = $('#gs');
       gs.className = 'game-stage';
-      gs.innerHTML = '<div class="center stack" style="padding:20px 0"><div style="font-size:64px">' + EMOJI[S.game] + '</div>' +
+      gs.innerHTML = '<div class="center stack" style="padding:20px 0"><div style="font-size:64px">' + EMOJI[cur] + '</div><div style="font-weight:700">' + esc(NC.gameNames[cur] || '') + '</div>' +
         (S.remaining > 0 ? '<button class="btn primary lg" id="g-start" style="margin:0 auto;min-width:220px">도전하기 (' + (S.used + 1) + '회차)</button><div class="tiny muted">누르는 순간 기회 1회가 사용돼요</div>'
           : '<div class="small muted">오늘 기회를 모두 썼어요</div>') +
         '<button class="btn' + (S.remaining > 0 ? ' ghost' : ' primary lg') + '" id="g-practice" style="margin:0 auto">연습 모드' + (S.remaining > 0 ? ' (파이 없음)' : '로 하기') + '</button></div>';
       if ($('#g-start')) $('#g-start').onclick = start;
-      $('#g-practice').onclick = function () { play({ practice: true, preset: practicePreset(), cfg: cfg }); };
+      $('#g-practice').onclick = function () { play({ practice: true, game: cur, preset: practicePreset(cur), cfg: cfgOf(cur) }); };
     }
-    function practicePreset() {
-      if (S.game === 'roulette') return { dir: DIRS[Math.floor(Math.random() * 8)] };
-      if (S.game === 'treasure') { var v = cfg.values; return { value: v[Math.floor(Math.random() * v.length)] }; }
+    function practicePreset(g) {
+      if (g === 'roulette') return { dir: DIRS[Math.floor(Math.random() * 8)] };
+      if (g === 'treasure') { var v = cfgOf(g).values; return { value: v[Math.floor(Math.random() * v.length)] }; }
       return {};
     }
     async function start() {
       var b = $('#g-start'); b.disabled = true;
       try {
-        var r = await NC.api('game.start', { game: S.game });
+        var r = await NC.api('game.start', { game: cur });
         store({ playId: r.playId, game: r.game, partial: {} });
-        play({ practice: false, preset: r.preset, cfg: r.cfg, playId: r.playId, round: r.round });
-      } catch (e) { NC.err(e); b.disabled = false; S = await NC.api('game.state'); if (alive()) draw(); }
+        play({ practice: false, game: r.game, preset: r.preset, cfg: r.cfg, playId: r.playId, round: r.round });
+      } catch (e) { NC.err(e); b.disabled = false; S = await NC.api('game.state'); if (alive()) { if (S.games.indexOf(cur) < 0) cur = S.games[0] || null; draw(); } }
     }
     function play(o) {
       var gs = $('#gs');
       gs.className = 'game-stage';
+      $$('[data-g]', el).forEach(function (b) { b.disabled = true; });
       gs.innerHTML = '<div class="row" style="margin-bottom:10px"><span class="badge ' + (o.practice ? 'soft' : 'lead') + '">' + (o.practice ? '연습 모드' : o.round + '회차 도전') + '</span>' +
+        (S.games.length > 1 ? '<span class="small">' + EMOJI[o.game] + ' ' + esc(NC.gameNames[o.game] || '') + '</span>' : '') +
         (o.practice ? '<button class="btn sm ghost right" id="g-exit">나가기</button>' : '') + '</div><div id="g-area"></div>';
       var area = $('#g-area'), finished = false, partial = {};
       var inst;
@@ -704,7 +715,7 @@
           if (finished) return; finished = true;
           active = null;
           var pie;
-          if (o.practice) pie = calc(S.game, r, o.preset, o.cfg, S.maxPerPlay);
+          if (o.practice) pie = calc(o.game, r, o.preset, o.cfg, S.maxPerPlay);
           else {
             try { var res = await NC.api('game.finish', { playId: o.playId, result: r }); pie = res.pie; store(null); NC.me.balance = res.balance; NC.updateShellMe(); }
             catch (e) { NC.err(e); pie = null; }
@@ -716,12 +727,12 @@
             '<button class="btn primary" id="g-back" style="margin-top:10px">확인</button>';
           gs.appendChild(box);
           box.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
-          $('#g-back', box).onclick = async function () { if (inst) inst.destroy(); S = await NC.api('game.state'); if (alive()) draw(); };
+          $('#g-back', box).onclick = async function () { if (inst) inst.destroy(); S = await NC.api('game.state'); if (alive()) { if (S.games.indexOf(cur) < 0) cur = S.games[0] || null; draw(); } };
         }
       };
-      inst = G[S.game](area, ctx);
+      inst = G[o.game](area, ctx);
       active = { o: o, inst: inst, getPartial: function () { return partial; }, finished: function () { return finished; } };
-      if ($('#g-exit')) $('#g-exit').onclick = function () { inst.destroy(); active = null; lobby(); };
+      if ($('#g-exit')) $('#g-exit').onclick = function () { inst.destroy(); active = null; $$('[data-g]', el).forEach(function (b) { b.disabled = false; }); lobby(); };
     }
     NC.cleanup = function () {
       if (!active) return;
