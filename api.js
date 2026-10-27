@@ -37,7 +37,7 @@
   var CACHEABLE = { 'ranking': 1, 'notices.list': 1, 'calendar': 1, 'settle.list': 1, 'logs.list': 1, 'game.config': 1, 'quests.list': 1 };
   var READS = { 'boot': 1, 'home': 1, 'mission.day': 1, 'me.status': 1, 'game.state': 1, 'shop.list': 1, 'posts.list': 1, 'public.members': 1, 'judge.grid': 1, 'judge.pending': 1,
     'admin.home': 1, 'warn.list': 1, 'dayoff.list': 1, 'members.list': 1, 'pie.ledger': 1, 'shop.admin': 1, 'game.plays': 1, 'settle.preview': 1, 'settings.get': 1,
-    'system.usage': 1, 'system.errors': 1, 'data.tables': 1, 'data.rows': 1, 'data.history': 1, 'data.check': 1 };
+    'system.usage': 1, 'system.ping': 1, 'system.errors': 1, 'data.tables': 1, 'data.rows': 1, 'data.history': 1, 'data.check': 1 };
   NC.clearCache = function () { cache = {}; };
   NC.api = async function (action, params) {
     var key = CACHEABLE[action] ? action + '|' + JSON.stringify(params || {}) + '|' + (NC.token || '') : null;
@@ -47,9 +47,20 @@
     if (key) cache[key] = { at: Date.now(), v: JSON.stringify(data) };
     return data;
   };
+  // 속도 점검: 최근 요청 100개의 걸린 시간을 이 화면(브라우저)에만 기억해요. 서버에는 보내지 않아요.
+  NC.reqLog = [];
+  function logReq(action, t1, res) {
+    try {
+      var t = (res && res.t) || {};
+      NC.reqLog.push({ at: Date.now(), page: (location.hash || '#/').replace(/^#\/?/, '').split('?')[0] || 'home', action: action,
+        total: Math.round(now() - t1), server: t.ms, q: t.q, db: t.db, cold: !!t.cold, ok: !!(res && res.ok) });
+      if (NC.reqLog.length > 100) NC.reqLog.splice(0, NC.reqLog.length - 100);
+    } catch (e) {}
+  }
+  function now() { return typeof performance !== 'undefined' && performance.now ? performance.now() : Date.now(); }
   async function callApi(action, params) {
     var body = JSON.stringify(Object.assign({ action: action, token: NC.token || undefined }, params || {}));
-    var res;
+    var res, t1 = now();
     if (NC.demo) {
       await ensureDemo();
       await wait(60);
@@ -67,6 +78,7 @@
       try { res = await r.json(); }
       catch (e) { throw netErr('서버 응답을 읽지 못했어요. (상태 ' + r.status + ') 잠시 후 다시 시도해 주세요.'); }
     }
+    logReq(action, t1, res);
     if (!res.ok) {
       var err = new Error(res.error || '알 수 없는 오류');
       err.code = res.code;

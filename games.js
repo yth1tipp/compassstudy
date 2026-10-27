@@ -2,18 +2,26 @@
 (function () {
   var NC = window.NC, U = NC.u, $ = U.$, $$ = U.$$, esc = U.esc;
   var EMOJI = { roulette: '🧭', rps: '✌️', mines: '💣', g2048: '🔢', metronome: '🎵', darts: '🎯', treasure: '🎁', stopwatch: '⏱️', cards: '🃏', updown: '🔼' };
+  // 게임 설명: 지금 설정된 숫자(판 수 · 탭 횟수 · 목표 시간 등)를 읽어서 만들어요
+  function fmtNum(n) { return String(Math.round(n * 100) / 100); }
   var DESC = {
-    roulette: '고정된 8방위 판 위에서 나침반 바늘이 돌다가 멈춘 방위의 파이를 받아요.',
-    rps: '컴퓨터와 가위바위보 3판! 이길수록 파이가 늘어나요.',
-    mines: '9×9 칸, 지뢰 10개. 추측 없이 논리만으로 풀 수 있는 판이에요. 빨리 풀수록 더 많이!',
-    g2048: '같은 숫자 타일을 합쳐 큰 타일을 만들어요. 더 못 움직이거나 그만두면 최고 타일로 정산해요.',
-    metronome: '진자가 가운데 판정선을 지나는 순간에 맞춰 3번 탭! 원하는 박에 치면 돼요.',
-    darts: '천천히 움직이는 조준점을 멈춰 다트 2발. 실제 다트 점수 그대로 받아요.',
-    treasure: '상자 3개 중 하나를 골라 열어보세요. 10~100 파이 중 하나가 들어 있어요.',
-    stopwatch: '시간이 안 보이는 상태로 정확히 10.00초에 멈춰보세요.',
-    cards: '공부 그림카드 8쌍을 22번 시도 안에 모두 찾아요.',
-    updown: '1~100 사이 숫자를 업/다운 힌트로 10번 안에 맞혀요.'
+    roulette: function () { return '고정된 8방위 판 위에서 나침반 바늘이 돌다가 멈춘 방위의 파이를 받아요.'; },
+    rps: function (c) { return '컴퓨터와 가위바위보 ' + c.rounds + '판! 이길수록 파이가 늘어나요.'; },
+    mines: function (c) { var d = minesDims(c); return d.n + '×' + d.n + ' 칸, 지뢰 ' + d.m + '개. 추측 없이 논리만으로 풀 수 있는 판이에요. 빨리 풀수록 더 많이!'; },
+    g2048: function () { return '같은 숫자 타일을 합쳐 큰 타일을 만들어요. 더 못 움직이거나 그만두면 최고 타일로 정산해요.'; },
+    metronome: function (c) { return '진자가 가운데 판정선을 지나는 순간에 맞춰 ' + c.taps + '번 탭! ' + (c.beatMs > 0 ? '(1분에 ' + fmtNum(60000 / c.beatMs) + '박) ' : '') + '원하는 박에 치면 돼요.'; },
+    darts: function (c) { return '움직이는 조준점을 멈춰 다트 ' + c.throws + '발. 실제 다트 점수 그대로 받아요.'; },
+    treasure: function (c) {
+      var lo = Math.min.apply(null, c.values), hi = Math.max.apply(null, c.values);
+      return '상자 3개 중 하나를 골라 열어보세요. ' + (lo === hi ? lo + ' 파이가' : lo + '~' + hi + ' 파이 중 하나가') + ' 들어 있어요.';
+    },
+    stopwatch: function (c) { return '시간이 안 보이는 상태로 정확히 ' + c.targetSec.toFixed(2) + '초에 멈춰보세요.'; },
+    cards: function (c) { return '공부 그림카드 8쌍을 ' + c.maxTries + '번 시도 안에 모두 찾아요.'; },
+    updown: function (c) { return '1~' + c.max + ' 사이 숫자를 업/다운 힌트로 ' + c.guesses + '번 안에 맞혀요.'; }
   };
+  /** 지뢰찾기 판 크기 · 지뢰 수 (설정이 너무 크거나 작아도 게임이 멈추지 않게 맞춰요) */
+  function minesDims(c) { var n = Math.max(4, Math.min(24, Math.round(+c.size) || 9)); return { n: n, m: Math.max(1, Math.min(Math.round(+c.mines) || 10, n * n - 10)) }; }
+  function descOf(g, c) { try { return DESC[g] && c ? DESC[g](c) : ''; } catch (e) { return ''; } }
   var PICS = ['🧭', '📚', '✏️', '⏰', '☕', '💡', '🎧', '📒'];
   var PIC_NAMES = ['나침반', '책', '연필', '알람', '커피', '전구', '헤드폰', '노트'];
   var DIR_KO = { N: '북', NE: '북동', E: '동', SE: '남동', S: '남', SW: '남서', W: '서', NW: '북서' };
@@ -43,7 +51,7 @@
     return a <= c.windows.PERFECT ? 'PERFECT' : a <= c.windows.GREAT ? 'GREAT' : a <= c.windows.GOOD ? 'GOOD' : 'MISS';
   }
 
-  function rewardTable(game, c) {
+  function rewardTable(game, c, max) {
     var rows = [];
     switch (game) {
       case 'roulette': rows = DIRS.map(function (d) { return [d + ' · ' + DIR_KO[d], c.table[d]]; }); rows.push(['확률', '각 12.5%']); break;
@@ -58,11 +66,13 @@
       case 'g2048': rows = c.tiers.map(function (t) { return ['최고 타일 ' + t[0] + (t === c.tiers[0] ? ' 이상' : ''), t[1]]; }); rows.push(['그 외', c['else']]); break;
       case 'metronome': rows = [['기본', c.base], ['PERFECT ±' + c.windows.PERFECT + 'ms', '+' + c.PERFECT], ['GREAT ±' + c.windows.GREAT + 'ms', '+' + c.GREAT], ['GOOD ±' + c.windows.GOOD + 'ms', '+' + c.GOOD], ['MISS', '+' + c.MISS]]; break;
       case 'darts': rows = [['싱글', '숫자'], ['더블 (트리플 구역 포함)', '숫자 × 2'], ['불', 50], ['빗나감', 0], ['최대 (불 ' + c.throws + '발)', 50 * c.throws]]; break;
-      case 'treasure': rows = [['상자 속 파이', c.values[0] + ' ~ ' + c.values[c.values.length - 1]], ['확률', '각 ' + Math.round(100 / c.values.length) + '%']]; break;
-      case 'stopwatch': rows = c.tiers.map(function (t) { return ['오차 ±' + t[0].toFixed(1) + '초', t[1]]; }); rows.push(['그 외', c['else']]); break;
+      case 'treasure': rows = [['상자 속 파이', Math.min.apply(null, c.values) + ' ~ ' + Math.max.apply(null, c.values)], ['확률', '각 ' + Math.round(100 / c.values.length) + '%']]; break;
+      case 'stopwatch': rows = c.tiers.map(function (t) { return ['오차 ±' + fmtNum(t[0]) + '초', t[1]]; }); rows.push(['그 외', c['else']]); break;
       case 'cards': rows = c.success.map(function (t) { return ['성공 · ' + t[0] + '시도 이내', t[1]]; }); rows.push(['실패 · 찾은 쌍 1개당', c.perPair + ' (최대 ' + c.failCap + ')']); break;
       case 'updown': rows = [['1번에 맞히기', c.first], ['한 번 늘 때마다', '-' + c.step], [c.guesses + '번째', Math.max(c.min, c.first - c.step * (c.guesses - 1))], ['못 맞혀도', c.fail]]; break;
     }
+    // 1회 최대 파이를 넘는 칸은 실제로 받는 값(최대치)으로 보여줘요
+    if (max > 0) rows.forEach(function (r) { if (typeof r[1] === 'number' && r[1] > max) r[1] = max + ' (최대)'; });
     return '<table class="reward-tbl" style="width:100%;border-collapse:collapse">' + rows.map(function (r) { return '<tr><td>' + r[0] + '</td><td>' + r[1] + '</td></tr>'; }).join('') + '</table>';
   }
   function fmtS(s) { var m = Math.floor(s / 60), r = s % 60; return (m ? m + '분' : '') + (r || !m ? (m ? ' ' : '') + r + '초' : ''); }
@@ -214,7 +224,7 @@
     return mine;
   }
   G.mines = function (st, ctx) {
-    var c = ctx.cfg, n = c.size, M = c.mines, mine = null, open = new Uint8Array(n * n), flag = new Uint8Array(n * n), cnt = [];
+    var c = ctx.cfg, dims = minesDims(c), n = dims.n, M = dims.m, mine = null, open = new Uint8Array(n * n), flag = new Uint8Array(n * n), cnt = [];
     var t0 = 0, timer = 0, over = false, flagMode = false, lp = null, lpFired = false;
     st.innerHTML = '<div class="stack" style="align-items:center"><div class="row" style="width:100%;max-width:420px"><span class="pill">💣 <b id="mn-left">' + M + '</b></span><span class="pill">⏱ <b id="mn-t">0</b>초</span>' +
       '<button class="btn sm right" id="mn-flag">🚩 깃발 모드 끔</button></div><div class="mines" id="mn-grid" style="grid-template-columns:repeat(' + n + ',1fr);width:min(420px,100%)"></div>' +
@@ -382,7 +392,7 @@
       '<div style="position:relative;width:100%;max-width:440px"><canvas class="game-cv" id="mt-cv" width="880" height="560" style="background:#1b2146"></canvas>' +
       '<div id="mt-j" class="pjsk" style="position:absolute;left:0;right:0;top:58%;text-align:center;font-size:clamp(30px,9vw,46px);pointer-events:none;opacity:0;transition:opacity .25s"></div></div>' +
       '<button class="btn lg" id="mt-go" style="min-width:200px">시작</button><div style="width:100%;max-width:340px" id="mt-board">' + judgeBoard(counts) + '</div>' +
-      '<div class="tiny" style="color:#aab3dc">진자가 가운데 판정선을 지나는 순간 화면(또는 스페이스바)을 누르세요. 원하는 박을 골라 3번!</div></div>';
+      '<div class="tiny" style="color:#aab3dc">진자가 가운데 판정선을 지나는 순간 화면(또는 스페이스바)을 누르세요. 원하는 박을 골라 ' + c.taps + '번!</div></div>';
     var cv = $('#mt-cv', st), g = cv.getContext('2d'), W = cv.width, H = cv.height;
     var px = W / 2, py = 40, L = H - 150, A = 0.52;
     function phase(now) { return (now - t0) / beat; }
@@ -619,7 +629,7 @@
       $('#ud-log', st).innerHTML = hist.map(function (x) { return '<span class="chip">' + x[0] + ' ' + (x[1] === 'UP' ? '⬆' : '⬇') + '</span>'; }).join('');
       $('#ud-i', st).value = ''; $('#ud-i', st).focus();
       ctx.partial({ success: false, guesses: n });
-      if (n >= c.guesses) { over = true; h.textContent = '정답 ' + ans; ctx.finish({ success: false, guesses: n }, '10번 안에 못 맞혔어요 (정답 ' + ans + ')'); }
+      if (n >= c.guesses) { over = true; h.textContent = '정답 ' + ans; ctx.finish({ success: false, guesses: n }, c.guesses + '번 안에 못 맞혔어요 (정답 ' + ans + ')'); }
     }
     $('#ud-go', st).onclick = go;
     $('#ud-i', st).onkeydown = function (e) { if (e.key === 'Enter') go(); };
@@ -655,7 +665,7 @@
       var bonusHint = S.chances.bonus === 0 && S.chances.bonusAvailable > 0 ? '<div class="banner" style="margin-top:12px">📚 오늘 공부인증을 체크하면 기회가 ' + S.chances.bonusAvailable + '회 늘어나요! <a href="#/home" class="right small">체크하러 가기 ›</a></div>' : '';
       var title = S.games.length ? S.gameNames.join(' / ') : '오늘은 쉬어요';
       return '<div class="card"><div class="game-hero"><div class="gi' + (S.games.length > 1 ? ' two' : '') + '">' + (S.games.map(function (g) { return EMOJI[g]; }).join('') || '🎮') + '</div><div class="grow"><div class="small muted">오늘의 미니게임 · ' + U.mdw(S.date) + (S.games.length > 1 ? ' · 도전할 때마다 둘 중 하나를 골라요' : '') + '</div><h2 style="font-size:21px">' + esc(title) + '</h2>' +
-        (S.games.length === 1 ? '<div class="small" style="color:var(--ink-2);margin-top:2px">' + (DESC[S.games[0]] || '') + '</div>' : '') + '</div></div>' +
+        (S.games.length === 1 ? '<div class="small" style="color:var(--ink-2);margin-top:2px">' + descOf(S.games[0], cfgOf(S.games[0])) + '</div>' : '') + '</div></div>' +
         '<div class="grid3" style="margin-top:14px"><div class="stat"><div class="k">남은 기회</div><div class="v num">' + S.remaining + '<small>/ ' + S.chances.total + '</small></div></div>' +
         '<div class="stat"><div class="k">오늘 획득</div><div class="v num">' + S.earned + '<small>/ ' + S.maxPerDay + '</small></div></div>' +
         (S.chances.extra ? '<div class="stat"><div class="k">운영진이 준 기회</div><div class="v num">' + (S.chances.extra > 0 ? '+' : '') + S.chances.extra + '</div></div>' : '') + '</div>' + bonusHint + '</div>';
@@ -663,12 +673,12 @@
     function picker() {
       if (S.games.length < 2) return '';
       return '<div class="game-pick">' + S.games.map(function (g) {
-        return '<button class="game-opt' + (g === cur ? ' on' : '') + '" data-g="' + g + '"><span class="e">' + EMOJI[g] + '</span><span class="n">' + esc(NC.gameNames[g] || g) + '</span><span class="d">' + esc(DESC[g] || '') + '</span></button>';
+        return '<button class="game-opt' + (g === cur ? ' on' : '') + '" data-g="' + g + '"><span class="e">' + EMOJI[g] + '</span><span class="n">' + esc(NC.gameNames[g] || g) + '</span><span class="d">' + esc(descOf(g, cfgOf(g))) + '</span></button>';
       }).join('') + '</div>';
     }
     function draw() {
       el.innerHTML = '<div class="stack">' + head() + (S.games.length ? picker() + '<div class="grid2" style="align-items:start"><div class="stack"><div class="game-stage" id="gs"></div></div>' +
-        '<div class="stack"><div class="card"><div class="card-head"><h2>보상표' + (S.games.length > 1 ? ' · ' + esc(NC.gameNames[cur] || '') : '') + '</h2><span class="small muted">1회 최대 ' + S.maxPerPlay + '</span></div>' + rewardTable(cur, cfgOf(cur)) + '</div>' +
+        '<div class="stack"><div class="card"><div class="card-head"><h2>보상표' + (S.games.length > 1 ? ' · ' + esc(NC.gameNames[cur] || '') : '') + '</h2><span class="small muted">1회 최대 ' + S.maxPerPlay + '</span></div>' + rewardTable(cur, cfgOf(cur), S.maxPerPlay) + '</div>' +
         '<div class="card"><div class="card-head"><h2>오늘 기록</h2></div>' + (S.plays.length ? '<div class="list">' + S.plays.map(function (p) {
           return '<div class="li"><span class="pill">' + p.round + '회차</span>' + (S.games.length > 1 ? '<span class="small">' + EMOJI[p.game] + '</span>' : '') + '<span class="grow small">' + esc(p.resultText || '') + '</span><b class="' + (p.pie ? 'plus' : '') + '">' + (p.status === 'done' ? '+' + p.pie : '진행 중') + '</b></div>';
         }).join('') + '</div>' : '<div class="small muted">아직 도전하지 않았어요</div>') + '</div>' +

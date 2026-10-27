@@ -67,9 +67,9 @@ var ACCESS = {
   'dayoff.manage':   [2, '멤버 관리', '데이오프 지정 · 취소'],
   'pie.adjust':      [2, '멤버 관리', '파이 직접 지급 · 회수'],
   'pie.view':        [2, '멤버 관리', '전체 파이 내역 보기'],
-  'quests.manage':   [2, '콘텐츠 관리', '퀘스트 등록 · 수정 (4주 뒤까지)'],
+  'quests.manage':   [2, '콘텐츠 관리', '퀘스트 등록 · 수정 ({weeksAhead})'],
   'shop.manage':     [2, '콘텐츠 관리', '상품 · 구매 관리'],
-  'games.schedule':  [2, '콘텐츠 관리', '날짜별 미니게임 정하기 (4주 뒤까지), 게임 켜기 · 끄기'],
+  'games.schedule':  [2, '콘텐츠 관리', '날짜별 미니게임 정하기 ({weeksAhead}), 게임 켜기 · 끄기'],
   'games.extra':     [2, '콘텐츠 관리', '멤버에게 미니게임 기회 더 주기, 플레이 기록 보기'],
   'notices.manage':  [2, '콘텐츠 관리', '공지 쓰기 · 고치기 · 지우기'],
   'posts.manage':    [2, '게시판', '남의 한줄 글 고치기 · 지우기, 반응 지우기'],
@@ -642,7 +642,7 @@ function settings_() {
   TEXT_FIELDS.forEach(function (f) { var v = tx[f[1]]; S.texts[f[0]] = v === undefined ? f[2] : String(v); });
   rows_('settings', 'access').forEach(function (r) {
     var f = str_(r.feature), key = ACCESS[f] ? f : null;
-    if (!key) for (var k in ACCESS) if (ACCESS[k][2] === f) key = k;
+    if (!key) for (var k in ACCESS) if (accessDesc_(k, null) === accessDesc_(f, null, true)) key = k;
     var rk = rankParse_(r.rank);
     if (key && rk !== null && LOCKED_ACCESS.indexOf(key) < 0) S.access[key] = rk;
   });
@@ -684,9 +684,15 @@ function writeGames_(S) {
 function writeTexts_(S) {
   replaceAll_('settings', 'texts', TEXT_FIELDS.map(function (f) { return { key: f[1], value: S.texts[f[0]] === undefined ? f[2] : S.texts[f[0]], note: /^menu\./.test(f[0]) ? 'O 또는 X' : /^color\./.test(f[0]) ? '#으로 시작하는 색 코드' : '' }; }));
 }
+/** 기능 설명. {weeksAhead} 는 '미리 정할 수 있는 기간' 설정값으로 바꿔요. w 가 null 이면 비교용으로 그 부분을 지워요 */
+function accessDesc_(k, w, raw) {
+  var d = raw ? String(k) : String(ACCESS[k] ? ACCESS[k][2] : '');
+  if (w === null) return d.replace(/\s*\(?\{weeksAhead\}\)?|\s*\(\d+주 뒤까지\)|\s*\(기간 제한 없음\)/g, '').trim();
+  return d.replace('{weeksAhead}', w > 0 ? w + '주 뒤까지' : '기간 제한 없음');
+}
 function writeAccess_(S) {
   replaceAll_('settings', 'access', Object.keys(S.access).filter(function (k) { return ACCESS[k] && LOCKED_ACCESS.indexOf(k) < 0 && S.access[k] !== ACCESS[k][0]; })
-    .map(function (k) { return { feature: k, rank: RANK_WORDS[S.access[k]], note: ACCESS[k][2] }; }));
+    .map(function (k) { return { feature: k, rank: RANK_WORDS[S.access[k]], note: accessDesc_(k, S.weeksAhead) }; }));
 }
 /** 처음 설치 · 새 시즌: 설정 표 전부 쓰기 */
 function writeAllSettings_(S) { writeBasic_(S); writeBonus_(S); writeMissions_(S); writeGames_(S); writeTexts_(S); writeAccess_(S); CTX.settings = null; }
@@ -2374,7 +2380,7 @@ ACTIONS['logs.list'] = { need: 'logs.view', fn: function (req) {
 // ---------- 시스템 설정 ----------
 ACTIONS['settings.get'] = { need: 'settings.edit', fn: function () {
   var S = settings_(), access = Object.keys(ACCESS).map(function (k) {
-    return { key: k, group: ACCESS[k][1], desc: ACCESS[k][2], dflt: ACCESS[k][0], rank: accessRank_(k), locked: LOCKED_ACCESS.indexOf(k) >= 0 };
+    return { key: k, group: ACCESS[k][1], desc: accessDesc_(k, S.weeksAhead), dflt: ACCESS[k][0], rank: accessRank_(k), locked: LOCKED_ACCESS.indexOf(k) >= 0 };
   });
   return { settings: clone_(S), version: VERSION, season: CTX.season, seasonName: CTX.meta.season_name || '', seasonStart: seasonStart_(), maintenance: CTX.meta.maintenance || '',
            basicFields: BASIC_FIELDS.map(function (f) { return { key: f[0], label: f[1], dflt: f[2], note: f[3], type: f[4] || 'num' }; }),
@@ -2490,6 +2496,8 @@ ACTIONS['season.reset'] = { write: true, need: 'season.reset', books: ['shop', '
 } };
 
 // ---------- 사용량 · 오류 · 점검 중 ----------
+/** 속도 점검: 가장 가벼운 요청 (로그인 확인 + 기본 설정 읽기만) */
+ACTIONS['system.ping'] = { need: 'usage.view', fn: function () { return { at: nowMs_() }; } };
 ACTIONS['system.usage'] = { need: 'usage.view', pre: function () { return [qkey_('size', {}), qkey_('usage', { days: 30 })]; }, fn: function () {
   var S = settings_(), size = q_('size', {}), days = q_('usage', { days: 30 }), today = ymd_(nowMs_());
   var t = days.filter(function (x) { return x.day === today; })[0] || { day: today, requests: 0, errors: 0, ms: 0 };
@@ -2883,9 +2891,20 @@ function rateLimited_(key, limit) {
   if (Object.keys(RATE_.map).length > 5000) RATE_.map = {};
   return r.n > (limit || RATE_.limit);
 }
-/** 요청 하나 처리 → { ok, data } 또는 { ok:false, error, code } */
+/** 속도 점검용: 이 서버(함수 한 대)가 받은 요청 수. 0이면 막 켜진 상태(첫 구동) */
+var BOOT_ = { n: 0 };
+/** 속도 점검용: 데이터베이스 질의 수와 걸린 시간을 세는 실행기 (동작은 그대로) */
+function statExec_(exec, st) {
+  return async function (text, params) {
+    st.q++;
+    var t1 = (CLOCK_ ? CLOCK_() : Date.now());
+    try { return await exec(text, params); } finally { st.db += (CLOCK_ ? CLOCK_() : Date.now()) - t1; }
+  };
+}
+/** 요청 하나 처리 → { ok, data, t } 또는 { ok:false, error, code, t }
+ *  t = { ms: 서버 안에서 걸린 시간, q: 데이터베이스 질의 수, db: 그중 데이터베이스 시간, cold: 막 켜진 서버였는지 } */
 async function handleRequest_(db, body) {
-  var t0 = (CLOCK_ ? CLOCK_() : Date.now()), req = {}, res, isErr = false;
+  var t0 = (CLOCK_ ? CLOCK_() : Date.now()), req = {}, res, isErr = false, st = { q: 0, db: 0 }, cold = BOOT_.n++ === 0;
   try {
     req = typeof body === 'string' ? JSON.parse(body || '{}') : (body || {});
     var a = ACTIONS[req.action];
@@ -2895,8 +2914,8 @@ async function handleRequest_(db, body) {
     await db.ready();
     await ensureInit_(db);
     // 기록을 바꾸는 기능은 처음부터 차례 잠금 안에서, 읽기만 하는 기능은 잠금 없이 (고칠 게 생기면 잠금 안에서 다시)
-    var r = a.write ? { needTx: true } : await runAction_(db, db.exec, a, req, false);
-    if (r.needTx) r = await db.tx(function (exec) { return runAction_(db, exec, a, req, true); });
+    var r = a.write ? { needTx: true } : await runAction_(db, statExec_(db.exec, st), a, req, false);
+    if (r.needTx) r = await db.tx(function (exec) { return runAction_(db, statExec_(exec, st), a, req, true); });
     res = { ok: true, data: r.data };
   } catch (ex) {
     isErr = !ex || !ex.userMsg;
@@ -2908,7 +2927,9 @@ async function handleRequest_(db, body) {
   } finally {
     CTX = null;
   }
-  try { await db.count(ymd_((CLOCK_ ? CLOCK_() : Date.now())), (CLOCK_ ? CLOCK_() : Date.now()) - t0, isErr); } catch (e4) {}
+  var ms = (CLOCK_ ? CLOCK_() : Date.now()) - t0;
+  res.t = { ms: ms, q: st.q, db: Math.min(st.db, ms), cold: cold };  // 질의가 동시에 돌면 합이 커질 수 있어서 서버 시간을 넘지 않게
+  try { await db.count(ymd_((CLOCK_ ? CLOCK_() : Date.now())), ms, isErr); } catch (e4) {}
   return res;
 }
 

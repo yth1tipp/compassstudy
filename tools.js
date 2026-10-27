@@ -10,6 +10,8 @@
     a.href = URL.createObjectURL(blob); a.download = name;
     document.body.appendChild(a); a.click();
     setTimeout(function () { URL.revokeObjectURL(a.href); a.remove(); }, 1000);
+    var framed = false; try { framed = window.self !== window.top; } catch (e) { framed = true; }
+    if (framed) NC.toast('파일이 안 받아지면 사이트를 브라우저에서 직접 열어 주세요. (미리보기 창에서는 내려받기가 막혀 있을 수 있어요)');
   }
   function readFile(file) { return new Promise(function (res, rej) { var r = new FileReader(); r.onload = function () { res(String(r.result)); }; r.onerror = rej; r.readAsText(file, 'utf-8'); }); }
   function stampName() { var d = new Date(Date.now() + 9 * 3600000); return d.toISOString().slice(0, 16).replace(/[-:T]/g, ''); }
@@ -211,6 +213,65 @@
   function mb(b) { return (b / 1048576).toFixed(b < 10 * 1048576 ? 2 : 1) + 'MB'; }
 
   // ============================================================
+  // 속도 점검 (개발자 화면 · 시스템 설정 안)
+  //   전체 시간 = 서버까지 오가는 시간 + 서버 안에서 쓴 시간(그중 데이터베이스 시간)
+  // ============================================================
+  function msStr(v) { if (v === undefined || v === null || !isFinite(v)) return '-'; return v < 1000 ? Math.round(v) + 'ms' : (v / 1000).toFixed(2) + '초'; }
+  function speedRow(x, i) {
+    var net = x.server !== undefined ? Math.max(0, x.total - x.server) : null;
+    return '<tr><td>' + (i !== undefined ? (i + 1) + '회' : '<span class="small">' + esc(x.action) + '</span>') + (x.cold ? ' <span class="pill" title="이 서버가 막 켜진 뒤 처음 받은 요청이에요">첫 구동</span>' : '') + (x.ok ? '' : ' <span class="pill st-fail">오류</span>') + '</td>' +
+      '<td class="num"><b>' + msStr(x.total) + '</b></td><td class="num">' + msStr(net) + '</td><td class="num">' + msStr(x.server) + '</td>' +
+      '<td class="num">' + msStr(x.db) + '</td><td class="num">' + (x.q === undefined ? '-' : x.q + '번') + '</td></tr>';
+  }
+  var SPEED_HEAD = '<thead><tr><th></th><th class="num">전체</th><th class="num">오가는 시간</th><th class="num">서버 안</th><th class="num">그중 데이터베이스</th><th class="num">질의</th></tr></thead>';
+  function speedCheck(box) {
+    if (!box) return;
+    box.innerHTML = '<div class="card-head"><h2>속도 점검</h2></div>' +
+      '<p class="small muted" style="margin:-4px 0 10px">가장 가벼운 요청을 5번 연달아 보내서 걸린 시간을 나눠서 보여줘요. <b>오가는 시간</b>은 이 기기에서 서버까지 갔다 오는 시간(인터넷 · 서버 위치), <b>서버 안</b>은 서버가 일한 시간, <b>그중 데이터베이스</b>는 데이터베이스를 기다린 시간이에요. 5번은 오늘 요청 수에 더해져요.' + (NC.demo ? ' (체험판은 서버 없이 이 브라우저 안에서 돌아서 숫자가 실제와 달라요)' : '') + '</p>' +
+      '<div class="row wrap"><button class="btn primary sm" id="sp-go">5번 재기</button><button class="btn sm" id="sp-log">최근 요청 보기</button></div><div id="sp-out" style="margin-top:12px"></div>';
+    var out = $('#sp-out', box);
+    $('#sp-go', box).onclick = async function () {
+      var b = this, rows = [];
+      b.disabled = true;
+      out.innerHTML = '<div class="small muted">재는 중… 0/5</div>';
+      try {
+        for (var i = 0; i < 5; i++) {
+          await NC.api('system.ping');
+          var x = NC.reqLog[NC.reqLog.length - 1];
+          if (x && x.action === 'system.ping') rows.push(x);
+          out.innerHTML = '<div class="small muted">재는 중… ' + (i + 1) + '/5</div>';
+        }
+        var warm = rows.filter(function (x) { return !x.cold; }), use = warm.length ? warm : rows;
+        function avg(k) { var v = use.filter(function (x) { return isFinite(x[k]); }); return v.length ? v.reduce(function (s, x) { return s + x[k]; }, 0) / v.length : null; }
+        var tot = avg('total'), srv = avg('server'), dbm = avg('db'), net = tot !== null && srv !== null ? Math.max(0, tot - srv) : null;
+        out.innerHTML = '<div class="grid3"><div class="stat"><div class="k">평균 전체</div><div class="v">' + msStr(tot) + '</div></div>' +
+          '<div class="stat"><div class="k">오가는 시간</div><div class="v">' + msStr(net) + '</div></div>' +
+          '<div class="stat"><div class="k">서버 안 (그중 데이터베이스)</div><div class="v">' + msStr(srv) + ' <small>' + msStr(dbm) + '</small></div></div></div>' +
+          (warm.length < rows.length ? '<p class="tiny muted" style="margin:6px 2px 0">평균은 \'첫 구동\'을 뺀 값이에요. 첫 구동은 한동안 요청이 없어서 서버가 새로 켜지느라 더 걸린 거예요.</p>' : '') +
+          '<div class="table-wrap" style="margin-top:10px"><table class="tbl">' + SPEED_HEAD + '<tbody>' + rows.map(function (x, i) { return speedRow(x, i); }).join('') + '</tbody></table></div>' +
+          '<p class="tiny muted" style="margin:8px 2px 0">이 요청은 화면 데이터를 거의 안 읽어요. 실제 화면은 \'최근 요청 보기\'에서 확인하세요.</p>';
+      } catch (e) { out.innerHTML = '<div class="empty">' + esc(e.message) + '</div>'; }
+      b.disabled = false;
+    };
+    $('#sp-log', box).onclick = function () {
+      // 같은 화면에서 잇달아 나간 요청끼리 묶어요 (화면이 바뀌거나 1.5초 넘게 쉬면 새 묶음)
+      var groups = [], g = null;
+      (NC.reqLog || []).filter(function (x) { return x.action !== 'system.ping'; }).forEach(function (x) {
+        var start = x.at - x.total;
+        if (!g || g.page !== x.page || start - g.end > 1500) { g = { page: x.page, start: start, end: x.at, list: [] }; groups.push(g); }
+        g.list.push(x); g.end = Math.max(g.end, x.at);
+      });
+      if (!groups.length) { out.innerHTML = '<div class="empty">아직 기록이 없어요. 다른 화면을 몇 개 열어본 뒤 다시 눌러 주세요.</div>'; return; }
+      out.innerHTML = '<p class="small muted" style="margin:0 2px 8px">이 기기에서 이번에 사이트를 연 뒤 보낸 요청이에요 (최근 100개, 새로고침하면 지워져요). 화면 하나를 열 때 요청이 몇 번 나갔고 모두 합쳐 얼마나 걸렸는지 묶어서 보여줘요.</p>' +
+        groups.slice(-20).reverse().map(function (g) {
+          var d = new Date(g.start), hm = ('0' + d.getHours()).slice(-2) + ':' + ('0' + d.getMinutes()).slice(-2) + ':' + ('0' + d.getSeconds()).slice(-2);
+          return '<div style="margin-bottom:12px"><div class="small" style="margin:0 2px 4px"><b>' + esc(g.page) + '</b> <span class="muted">· ' + hm + ' · 요청 ' + g.list.length + '번 · 모두 ' + msStr(g.end - g.start) + '</span></div>' +
+            '<div class="table-wrap"><table class="tbl">' + SPEED_HEAD + '<tbody>' + g.list.map(function (x) { return speedRow(x); }).join('') + '</tbody></table></div></div>';
+        }).join('');
+    };
+  }
+
+  // ============================================================
   // 시스템 설정
   // ============================================================
   P['admin/system'] = async function (el, q, alive) {
@@ -222,6 +283,7 @@
     var bk = ['attend', 'study', 'problem', 'mentoring', 'daily'];
     var html = '<div class="stack">';
     if (C.usage) html += '<div class="card" id="sy-usage"><div class="card-head"><h2>사용량</h2><button class="btn sm ghost right" id="sy-errs">오류 기록</button></div><div class="loading"><div class="spinner"></div></div></div>';
+    if (C.usage) html += '<div class="card" id="sy-speed"></div>';
     if (C.season) html += '<div class="card"><div class="card-head"><h2>시즌</h2><span class="small muted">버전 ' + esc(d.version) + (NC.demo ? ' · 체험판' : '') + '</span></div><div class="form-grid">' +
       '<label class="field"><span>시즌 번호</span><input class="input" value="' + d.season + '" disabled></label>' +
       '<label class="field"><span>시즌 이름 (비우면 \'시즌 ' + d.season + '\')</span><input class="input" id="se-n" value="' + esc(d.seasonName) + '"></label>' +
@@ -300,6 +362,7 @@
         $('#sy-errs').onclick = showErrors;
       } catch (e) { box.innerHTML = '<div class="empty">' + esc(e.message) + '</div>'; }
     }
+    if (C.usage) speedCheck($('#sy-speed'));
     async function showErrors() {
       try {
         var r = await NC.api('system.errors');
@@ -335,7 +398,7 @@
       $('#tx-save').onclick = async function () {
         var t = {};
         $$('[data-tx]').forEach(function (i) { t[i.getAttribute('data-tx')] = i.type === 'checkbox' ? (i.checked ? 'O' : 'X') : i.value; });
-        try { await NC.api('texts.save', { texts: t }); await after(); location.reload(); } catch (e) { NC.err(e); }
+        try { await NC.api('texts.save', { texts: t }); await after(); NC.me = null; NC.render(); } catch (e) { NC.err(e); }
       };
     }
     if ($('#acc-save')) {
@@ -363,7 +426,7 @@
     };
     if ($('#sy-reset')) $('#sy-reset').onclick = async function () {
       if (!(await NC.confirm('체험판 데이터를 처음 상태로 되돌릴까요?', { danger: true, ok: '처음으로' }))) return;
-      await NC.resetDemo(); NC.setToken(null); location.hash = '#/home'; location.reload();
+      await NC.resetDemo(); NC.toast('처음 상태로 되돌렸어요.', 'ok'); NC.logout();
     };
   };
 
