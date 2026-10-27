@@ -7,7 +7,7 @@
  * API_KEY: 보통은 비워 둡니다. 서버 함수의 'JWT 확인'을 끌 수 없을 때만 Supabase 의 anon(공개) 키를 넣으세요.
  */
 window.NC_CONFIG = {
-  API_URL: 'https://kbvqtnxeqkzlkaynjhpt.supabase.co/functions/v1/compass',
+  API_URL: 'https://kbvqtnxeqkzlkaynjhpt.supabase.co/functions/v1/compass?forceFunctionRegion=ap-northeast-1',
   API_KEY: '',
   GROUP_NAME: '나침반'
 };
