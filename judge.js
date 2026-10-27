@@ -202,10 +202,10 @@
           if (i.st === 'pending') { pend++; colPend[ci]++; }
           h += cellHtml(cell, ri, ci);
         });
-        h += '<td class="sum">' + done + (pend ? ' · <b style="color:#a77b00">' + pend + '</b>' : '') + '</td></tr>';
+        h += '<td class="sum">' + done + (pend ? ' · <b style="color:var(--warn)">' + pend + '</b>' : '') + '</td></tr>';
       });
       if (!a.rows.length) h += '<tr><td colspan="' + (a.cols.length + 2) + '"><div class="empty">조건에 맞는 칸이 없어요</div></td></tr>';
-      h += '</tbody><tfoot><tr><th>완료 · 대기</th>' + a.cols.map(function (c, ci) { return '<td class="sum">' + colDone[ci] + (colPend[ci] ? ' · <b style="color:#a77b00">' + colPend[ci] + '</b>' : '') + '</td>'; }).join('') + '<td class="sum"></td></tr></tfoot></table></div>';
+      h += '</tbody><tfoot><tr><th>완료 · 대기</th>' + a.cols.map(function (c, ci) { return '<td class="sum">' + colDone[ci] + (colPend[ci] ? ' · <b style="color:var(--warn)">' + colPend[ci] + '</b>' : '') + '</td>'; }).join('') + '<td class="sum"></td></tr></tfoot></table></div>';
       h += '<div class="legend"><span><i class="dot st-none"></i>미표시</span><span><i class="dot st-pending"></i>확인 대기</span><span><i class="dot st-ok"></i>확인 완료</span><span><i class="dot st-fail"></i>최종 미수행</span><span><span class="dayoff-tag" style="padding:0 4px;font-size:10px">OFF</span>데이오프</span>' +
         '<span class="muted">· 칸을 눌러 판정 · 이름이나 날짜를 누르면 그 줄 전체 선택' + (window.innerWidth > 1023 ? ' · 드래그로 여러 칸 선택 · 방향키 이동, 1 인정 / 2 애매함 / 3 미수행 / 0 초기화' : '') + '</span></div>';
       var n = Object.keys(S.sel).length;
@@ -360,7 +360,7 @@
         (i.off ? '<dt>데이오프</dt><dd><span class="dayoff-tag">OFF</span> ' + (i.off.mode === 'self' ? '본인 신청' : i.off.mode === 'holiday' ? '전체 휴일' : esc(i.off.byName) + ' 지정') + (i.off.reason ? ' · ' + esc(i.off.reason) : '') + '</dd>' : '') +
         '</dl>';
       if (i.locked && !i.editable) det += '<p class="small muted">🔒 정산이 끝난 주라 바꿀 수 없어요. 필요하면 멤버 관리 › 파이에서 직접 지급·회수하세요.</p>';
-      else if (i.locked) det += '<p class="small" style="color:var(--warn,#a77b00)">🔒 정산이 끝난 주예요. 바꾸면 파이 차액이 바로 반영되지만, 이미 지급한 주간 보너스는 그대로예요. (정산을 취소하고 다시 정산할 수 있어요)</p>';
+      else if (i.locked) det += '<p class="small" style="color:var(--warn)">🔒 정산이 끝난 주예요. 바꾸면 파이 차액이 바로 반영되지만, 이미 지급한 주간 보너스는 그대로예요. (정산을 취소하고 다시 정산할 수 있어요)</p>';
       else if (c.date > G.today) det += '<p class="small muted">미래 날짜는 판정할 수 없어요.</p>';
       else if (!isAdmin && c.mission !== 'attend') det += '<p class="small muted">이 칸은 생존신고 출석 처리만 할 수 있어요.</p>';
       var acts = '';
